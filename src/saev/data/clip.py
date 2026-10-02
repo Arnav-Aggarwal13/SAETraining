@@ -53,7 +53,8 @@ class Vit(models.Transformer, torch.nn.Module):
         return w
 
     def get_residuals(self) -> list[torch.nn.Module]:
-        return self.model.transformer.resblocks
+        # bigG SAE project: append ln_post so layer 48 = final token output (open_clip output_tokens)
+        return [*self.model.transformer.resblocks, self.model.ln_post]
 
     def get_token_i(self, content_tokens_per_example: int) -> slice:
         return slice(None, None, None)
