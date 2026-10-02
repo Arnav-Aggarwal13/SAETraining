@@ -2,11 +2,13 @@
 - To submit jobs, use `launch.py` scripts (e.g., `uv run python scripts/launch.py SUBCOMMAND`). Nearly every part of this package has a launch.py entrypoint. Don't try to run modules directly with `-m`.
 - In `contrib/trait_discovery/`, use `uv run python scripts/launch.py SUBCOMMAND` (e.g., `cls::train`, `cls::eval`, `probe1d`). Note the `::` separator for subcommands.
 - After making edits, run `uvx ruff format --preview .` to format the file, then run `uvx ruff check --fix .` to lint, then run `uvx ty check FILEPATH` to type check (`ty` is prerelease software, and typechecking often will have false positives). Only do this if you think you're finished, or if you can't figure out a bug. Maybe linting will make it obvious. Don't fix linting or typing errors in files you haven't modified.
+- For CPU jobs add: `#SBATCH --account=mit_amf_standard_cpu` and `#SBATCH --qos=mit_amf_standard_cpu`
+- For GPU jobs add: `#SBATCH --account=mit_amf_standard_gpu` and `#SBATCH --qos=mit_amf_standard_gpu`
 
 # Gather Context
 
 - Public docs for developers and users are in markdown in docs/src. Internal, messier design and implementation docs are in markdown in docs/research/issues. Both are valuable sources of context when getting started.
-- You can use `gh` to access issues and PRs on GitHub to gather more context. We use GitHub issues a lot to share ideas and communicate about problems, so you should almost always check to see if there's a relevant GitHub issue for whatever you're working on.
+
 
 # Code Style
 
@@ -29,8 +31,7 @@
 - Try to keep code short. Shorter code is in principle easier to read. If variable names are really long, shorten based on conventions in this codebase (..._indices -> ..._i). Since you use `uvx ruff format --preview`, if you can make a small variable name change to fit everything on one line, that's a good idea. When variables are used once, simply inline it.
 - If you make edits to a file and notice that I made edits to your edits, note the changes I make compared to your initial version and explicitly describe the style of changes. Keep these preferences in mind as you write the rest of the code.
 - Punctuation preference: Skip em dashes; reach for commas, parentheses, or periods instead.
-- Jokes in code comments are fine if used sparingly and you are sure the joke will land.
-- Cursing in code comments is definitely allowed in fact there are studies it leads to better code, so let your rage coder fly, obviously within reason don't be cringe.
+
 
 # Defensive Programming
 
@@ -75,6 +76,7 @@ In some cases, you will be asked to perform a seemingly impossible task, either 
 In these cases, do not attempt to implement a half-baked solution just to satisfy the developer's request.
 If the task seems too hard, be honest that you couldn't solve it in the proper way, leave the code unchanged, explain the situation to the developer and ask for further feedback and clarifications.
 The developer is a domain expert that will be able to assist you in these cases.
+When you provide me code, explain what it does and how it works. 
 
 # Tensor Variables
 
@@ -92,40 +94,6 @@ The key for these suffixes:
 
 For example, an ViT activation tensor with shape (batch, width, height d_vit) is `acts_bwhd`.
 
-# Slurm (OSC Ascend Cluster)
-
-Account is PAS2136.
-
-Node types:
-
-- Quad nodes (a0001-a0024): 24 nodes, 4x A100-80GB GPUs (NVLink), 96 CPUs, ~920GB RAM. Premium nodes for multi-GPU training needing fast GPU-GPU communication.
-- Nextgen nodes (a0101+): 270 nodes, 2-3x A100-40GB GPUs (PCIe), 128 CPUs, ~470GB RAM. Standard nodes for most workloads.
-
-| Partition | Nodes | Time Limit | Use Case |
-|-----------|-------|------------|----------|
-| `nextgen` | 270 | 7 days | Default choice. Standard GPU jobs, CPU-only jobs. |
-| `quad` | 24 | 7 days | Multi-GPU training needing NVLink or 80GB VRAM. |
-| `longgpu` | 270 | 14 days | Long-running training jobs. |
-| `debug-nextgen` | 270 | 1 hour | Quick tests, debugging. |
-| `debug-quad` | 24 | 1 hour | Quick tests on quad nodes. |
-| `preemptible-nextgen` | 270 | 1 day | Low-priority jobs that can be interrupted. |
-| `preemptible-quad` | 24 | 1 day | Low-priority jobs on quad nodes. |
-
-Guidelines:
-
-- CPU-only jobs: Always use `nextgen`. Using `quad` for CPU work wastes premium GPU resources and may block other users.
-- Single-GPU jobs: Use `nextgen` (more nodes = faster scheduling).
-- Multi-GPU jobs: Use `nextgen` unless you need NVLink (e.g., large model parallel training) or 80GB VRAM.
-- Quick tests: Use `debug-nextgen` for jobs under 1 hour.
-- Check queue: `squeue -u $USER`
-- Check partitions: `sinfo -s`
-
-Filesystems:
-
-- `/fs/ess/PAS2136/...` is persistent storage, treat it as the source of truth for run directories, checkpoints, and paper-ready metrics.
-- `/fs/scratch/...` is ephemeral and can be cleaned, do not rely on scratch-only outputs for figures, tables, or reproducibility.
-- If an analysis artifact is needed later (e.g., `inference/{shard}/metrics.json`), write it under /fs/ess-backed run directories.
-- If activation shards are missing, assume scratch data may be gone, re-run inference to regenerate shards on /fs/scratch rather than adding fallback paths.
 
 # Collaboration Style
 
@@ -156,3 +124,5 @@ If these pass, still do not finalize until notebook execution is clean in MCP:
     - Report notebook status explicitly (`clean` vs `errors`), and include the first line of the failing cell + error message if any remain.
 
 Static linting checks are useful but do not replace this Marimo MCP runtime check.
+
+@contrib/bigg_openimages/CLAUDE.md
