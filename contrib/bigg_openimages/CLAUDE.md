@@ -93,3 +93,5 @@ Key config (`saev/framework/train.py`, `saev/nn/modeling.py`, `saev/nn/objective
 - BatchTopK threshold update checks `pos.numel() >= 0` (always true), so an all-zero batch would crash on `pos.min()`.
 - Matryoshka decode path has an author TODO saying it needs cleanup.
 - Docs lag the code in several places (launch paths, sweep format, the activations vs shards naming). Trust the source.
+
+

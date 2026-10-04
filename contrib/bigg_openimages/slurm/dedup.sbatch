@@ -1,12 +1,13 @@
 #!/bin/bash
 #SBATCH -J oi-dedup
-# EDIT the partition below (see `sinfo`)
-#SBATCH -p GPU_PARTITION
+#SBATCH -p mit_normal_gpu
 #SBATCH --gres=gpu:1
 #SBATCH -c 16
 #SBATCH --mem=64G
 #SBATCH -t 4:00:00
 #SBATCH -o logs/%x-%j.out
+#SBATCH --account=mit_amf_standard_gpu
+#SBATCH --qos=mit_amf_standard_gpu
 set -euo pipefail
 cd $HOME/SAETraining && source contrib/bigg_openimages/env.sh
 DRY=${DRY:---dry-run}   # submit with DRY= to actually move files: sbatch --export=ALL,DRY= slurm/dedup.sbatch

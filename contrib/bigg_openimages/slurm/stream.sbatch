@@ -1,6 +1,5 @@
 #!/bin/bash
 #SBATCH -J oi-stream
-# EDIT the partition below (see `sinfo`)
 #SBATCH -p mit_normal
 #SBATCH -c 16
 #SBATCH --mem=32G
