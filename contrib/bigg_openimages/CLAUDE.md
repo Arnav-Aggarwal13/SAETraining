@@ -9,7 +9,6 @@ Verified against Imageomics/saev @ 9715c45 (2026-06-18) and open_clip_torch 3.3.
 - `check_tokens.py`: asserts shard tokens == open_clip `model.visual(x)` output_tokens (ln_post, unprojected). Must PASS before training.
 - `slurm/{stream,dedup,shards,train}.sbatch`: partitions are placeholders; submit from repo root; `logs/` must exist before `sbatch`. Overrides via `--export=ALL,VAR=...` (SPLIT, DRY, N_TRAIN).
 - tyro CLI order: parent flags first, then `sae.activation:batch-top-k` and its `--sae.activation.*` flags last. `objective` is not a subcommand (single type); use `--objective.n-prefixes`.
-- Root CLAUDE.md/AGENTS.md are saev's; their "scripts/launch.py" mention is stale (launch.py is at the root). The CLAUDE.md/AGENTS.md under contrib/trait_discovery/docs/papers/ are for LaTeX papers and are irrelevant.
 
 ## Repo setup
 - Repo: github.com/Arnav-Aggarwal13/SAETraining. A clone of Imageomics/saev with full saev history (not a GitHub fork; standalone, can be private).
@@ -79,9 +78,31 @@ Key config (`saev/framework/train.py`, `saev/nn/modeling.py`, `saev/nn/objective
 - Objective: ONLY Matryoshka exists and it is the default (n_prefixes=10, Pareto-sampled prefix cuts, last prefix is always full d_sae). For a plain SAE set `--objective.n-prefixes 1`.
 - Init: `reinit_blend=0.8` datapoint init (encoder rows = 0.8 x mean-centered real activations + 0.2 x kaiming; W_dec = W_enc^T; needs >= max(d_sae, 65536) samples). b_dec starts at 0. `normalize_w_dec=True`, `remove_parallel_grads=True`.
 - Optim: Adam (or Muon), lr 4e-4, 500 warmup steps, then cosine to 0 over n_train (`WarmupCosine`), grad_clip 1.0, `n_train` 100M, `n_val` 10M. Sparsity-coeff scheduling is commented out, so `n_sparsity_warmup` does nothing.
-- Logs (wandb, `track=True`): normalized_mse (SSE / mean-baseline SSE), L0, L1, dead_unit_pct, lr. Post-train eval: n_dead, n_almost_dead (<1e-7 freq), n_dense.
+- Logs: see "Metrics" below.
 - Sweeps: `--sweep file.py` where file defines `make_cfgs() -> list[dict]` of nested overrides (e.g. `{"lr": 3e-4, "sae": {"d_sae": 26624}}`). SAEs with identical data config train in parallel on one GPU off one data stream. Docs showing TOML are stale.
 - Eval afterward: `uv run launch.py inference --run RUN --data.shards DIR --data.layer 48` writes metrics + sparse `token_acts.npz`. Visualization lives in `contrib/trait_discovery` (`scripts/launch.py visuals`).
+
+## Metrics (src/saev/framework/train.py, nn/objectives.py)
+Training metrics: every 25 steps on the current batch (noisy). Eval metrics: once at end of training, on val, SAE in eval mode.
+Judge runs by `eval/normalized_mse` at a given `eval/l0`, then dead/dense counts. A run is only better if it wins at matched L0.
+
+Training:
+- `metrics/normalized_mse` = SSE(x - x_hat) / SSE(x - mean). 0 perfect, 1 = predicting the mean. Main curve. (`explained_variance` ~ 1 - this.)
+- `loss/mse`: raw-unit per-element MSE (averaged over Matryoshka prefixes). Not comparable across configs.
+- `loss/l0`: active latents per token; = k for TopK/BatchTopK.
+- `loss/n_dead`: latents silent for 10M tokens. The real dead count; should stay a few % of d_sae.
+- `loss/aux`: AuxK term; 0 until latents go dead (~first 600 steps). `loss/sparsity`: always 0 for TopK/BatchTopK.
+- `metrics/dead_unit_pct`: didn't fire in THIS batch only; inflated (avg firing rate k/d_sae ~ 0.24%). Trends only.
+- `metrics/avg_decoder_row_norm`: must stay ~1.0. `metrics/dictionary_coherence`: max decoder cosine; ~0.99+ = duplicate features. `metrics/grad_norm`: spikes/climb = lower lr.
+
+Eval:
+- `eval/normalized_mse`: the number to report/compare.
+- `eval/l0`: BatchTopK uses the learned threshold, so not exactly k; should be within ~25% of k or eval numbers are untrustworthy.
+- `eval/n_dead` (never fired) and `eval/n_almost_dead` (<1e-7 freq): want < ~1-2% of d_sae; >10% = wasted capacity.
+- `eval/n_dense` (>1% of tokens): a few are normal (position/global features); >~1-2% of d_sae = unspecific features.
+- `eval/freqs`: log10 freq should be roughly unimodal near log10(k/d_sae) ~ -2.6.
+
+Rough targets (rules of thumb, not guarantees): normalized_mse < 0.15 good, 0.15-0.25 usable, > 0.3 poor (k=64, 16x).
 
 ## Starting config and what to iterate on
 - Start: BatchTopK, top_k 64, d_sae 26624 (16x), `--objective.n-prefixes 1`, lr 4e-4, batch 16384, n_train ~= available tokens (<= ~1 epoch).
@@ -93,5 +114,3 @@ Key config (`saev/framework/train.py`, `saev/nn/modeling.py`, `saev/nn/objective
 - BatchTopK threshold update checks `pos.numel() >= 0` (always true), so an all-zero batch would crash on `pos.min()`.
 - Matryoshka decode path has an author TODO saying it needs cleanup.
 - Docs lag the code in several places (launch paths, sweep format, the activations vs shards naming). Trust the source.
-
-

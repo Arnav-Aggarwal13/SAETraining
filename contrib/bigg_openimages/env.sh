@@ -8,6 +8,8 @@ export RUNS_ROOT=$HOME/sae_runs/saev/runs   # must end in saev/runs
 export HF_HOME=$POOL/hf_cache               # bigG weights (~10 GB) land here, not in home
 export NSD_HDF5=$HOME/orcd/pool/nsd_stimuli/nsd_stimuli.hdf5
 # Filled in after making shards (ls $SHARDS_ROOT):
-export TRAIN_HASH=$SHARDS_ROOT/99a257f8
-export VAL_HASH=$SHARDS_ROOT/c3eca3fc
+export TRAIN_HASH=99a257f8
+export VAL_HASH=c3eca3fc
 mkdir -p "$OI_DIR" "$SHARDS_ROOT" "$RUNS_ROOT" "$HF_HOME" "$REPO/logs"
+export UV_PYTHON_PREFERENCE=only-managed
+export UV_PYTHON=3.12
