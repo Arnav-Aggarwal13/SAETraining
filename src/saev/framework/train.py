@@ -403,6 +403,9 @@ def train(
                         batch_sse_sae_value / batch_baseline_sse_value
                     )
                     explained_var = 1 - residual.var() / acts_BD.var()
+                    cos_unc, cos_cen = statistics.cosine_sums(
+                        acts_BD, fwd.x_hats[:, -1, :], batch_sum_vec / n_batch
+                    )
 
                     # Dead unit percentage: fraction of units that never activate
                     dead_pct = ((fwd.f_x.abs() > 1e-12).sum(0) == 0).float().mean()
@@ -428,6 +431,8 @@ def train(
                         "metrics/sse_sae": batch_sse_sae_value,
                         "metrics/sse_baseline": batch_baseline_sse_value,
                         "metrics/normalized_mse": normalized_mse_value,
+                        "metrics/cosine_uncentered": cos_unc.item() / n_batch,
+                        "metrics/cosine_centered": cos_cen.item() / n_batch,
                         **dl_metrics,
                     }
 
@@ -480,6 +485,10 @@ class EvalMetrics:
     """Total reconstruction sum-squared error for the SAE."""
     sse_baseline: float
     """Total reconstruction sum-squared error for the mean baseline."""
+    cosine_uncentered: float
+    """Mean per-token cosine similarity between activations and reconstructions."""
+    cosine_centered: float
+    """Same, after subtracting the validation mean from both."""
     n_dead: int
     """Number of neurons that never fired on any example."""
     n_almost_dead: int
@@ -505,6 +514,22 @@ class EvalMetrics:
             columns=["mean_value"], data=dct["mean_values"][:, None].numpy()
         )
         return {f"eval/{key}": value for key, value in dct.items()}
+
+
+@beartype.beartype
+@torch.no_grad()
+def get_val_mean(cfg: Config, d_model: int, n_val: int) -> Tensor:
+    """Mean activation over the validation tokens, from a separate pass. Centered cosine similarity needs the mean before the main eval pass starts."""
+    dataloader = saev.data.ShuffledDataLoader(cfg.val_data)
+    dataloader = saev.utils.scheduling.BatchLimiter(dataloader, n_val)
+    sum_vec_d = torch.zeros((d_model,), dtype=torch.float64, device=cfg.device)
+    n_tokens = 0
+    for batch in helpers.progress(dataloader, desc="val mean", every=cfg.log_every):
+        acts_bd = batch["act"].to(cfg.device, torch.float64)
+        sum_vec_d += acts_bd.sum(dim=0)
+        n_tokens += len(acts_bd)
+    assert n_tokens > 0, "Validation dataloader yielded zero tokens."
+    return sum_vec_d / n_tokens
 
 
 @beartype.beartype
@@ -541,6 +566,9 @@ def evaluate(
     total_l1_sum = torch.zeros(len(cfgs), dtype=torch.float64)
     total_mse_sum = torch.zeros(len(cfgs), dtype=torch.float64)
     total_sse_sae = torch.zeros(len(cfgs), dtype=torch.float64, device=cfg.device)
+    total_cos_unc = torch.zeros(len(cfgs), dtype=torch.float64, device=cfg.device)
+    total_cos_cen = torch.zeros(len(cfgs), dtype=torch.float64, device=cfg.device)
+    mean_d = get_val_mean(cfg, saes[0].cfg.d_model, n_val)
     sum_sq = torch.zeros((), dtype=torch.float64, device=cfg.device)
     sum_vec = torch.zeros(
         (saes[0].cfg.d_model,), dtype=torch.float64, device=cfg.device
@@ -560,6 +588,11 @@ def evaluate(
             # Get f_x for metrics
             residual = acts_BD - fwd.x_hats[:, -1, :]
             total_sse_sae[i] += torch.sum((residual.to(torch.float64)) ** 2)
+            cos_unc, cos_cen = statistics.cosine_sums(
+                acts_BD, fwd.x_hats[:, -1, :], mean_d
+            )
+            total_cos_unc[i] += cos_unc
+            total_cos_cen[i] += cos_cen
             n_fired[i] += einops.reduce(
                 fwd.f_x > 0, "batch d_sae -> d_sae", "sum"
             ).cpu()
@@ -588,6 +621,8 @@ def evaluate(
     sse_sae = total_sse_sae.tolist()
     normalized_mse = (total_sse_sae / sse_baseline_value).tolist()
     sse_baseline_all = [sse_baseline_value] * len(cfgs)
+    cosine_uncentered = (total_cos_unc / n_tokens).tolist()
+    cosine_centered = (total_cos_cen / n_tokens).tolist()
 
     n_dead = einops.reduce(freqs == 0, "n_saes d_sae -> n_saes", "sum").tolist()
     n_almost_dead = einops.reduce(
@@ -605,6 +640,8 @@ def evaluate(
                 normalized_mse=normalized_mse[i],
                 sse_sae=sse_sae[i],
                 sse_baseline=sse_baseline_all[i],
+                cosine_uncentered=cosine_uncentered[i],
+                cosine_centered=cosine_centered[i],
                 n_dead=n_dead[i],
                 n_almost_dead=n_almost_dead[i],
                 n_dense=n_dense[i],

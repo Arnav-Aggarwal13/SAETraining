@@ -26,6 +26,8 @@ class Metrics:
     - `n_tokens`: number of tokens included in aggregation
     - `d_model`: embedding width per token
     - `n_elements = n_tokens * d_model`
+
+    Optional terms (None when not computed, e.g. older `metrics.json` files) are the mean per-token cosine similarity between activations and reconstructions: `cosine_uncentered` is cos(x, x_hat) and `cosine_centered` is cos(x - mean, x_hat - mean) with the corpus mean.
     """
 
     mse_per_dim: float
@@ -38,6 +40,8 @@ class Metrics:
     n_tokens: int
     d_model: int
     n_elements: int
+    cosine_uncentered: float | None = None
+    cosine_centered: float | None = None
 
     def __post_init__(self):
         msg = f"n_tokens must be an int, got {type(self.n_tokens)}."
@@ -82,9 +86,23 @@ class Metrics:
         msg = f"normalized_mse={self.normalized_mse} is inconsistent with sse_recon/sse_baseline={self.sse_recon / self.sse_baseline}."
         assert close(self.normalized_mse, self.sse_recon / self.sse_baseline), msg
 
+        for key in ("cosine_uncentered", "cosine_centered"):
+            value = getattr(self, key)
+            if value is None:
+                continue
+            msg = f"{key} must be in [-1, 1], got {value}."
+            assert -1.0 - 1e-9 <= value <= 1.0 + 1e-9, msg
+
     @classmethod
     def from_accumulators(
-        cls, *, sse_recon: float, sse_baseline: float, n_tokens: int, d_model: int
+        cls,
+        *,
+        sse_recon: float,
+        sse_baseline: float,
+        n_tokens: int,
+        d_model: int,
+        sum_cos_uncentered: float | None = None,
+        sum_cos_centered: float | None = None,
     ) -> "Metrics":
         """Construct metrics from aggregate sums and shape information.
 
@@ -93,6 +111,8 @@ class Metrics:
             sse_baseline: Sum of squared mean-baseline errors over the same tokens and dimensions.
             n_tokens: Number of selected tokens in the aggregation set.
             d_model: Activation dimension per token.
+            sum_cos_uncentered: Optional sum over the same tokens of cos(x, x_hat).
+            sum_cos_centered: Optional sum over the same tokens of cos(x - mean, x_hat - mean).
 
         Returns:
             A validated `Metrics` object with all derived fields populated.
@@ -119,13 +139,22 @@ class Metrics:
             n_tokens=n_tokens,
             d_model=d_model,
             n_elements=n_elements,
+            cosine_uncentered=None
+            if sum_cos_uncentered is None
+            else sum_cos_uncentered / n_tokens,
+            cosine_centered=None
+            if sum_cos_centered is None
+            else sum_cos_centered / n_tokens,
         )
 
     @classmethod
     def from_dict(cls, dct: abc.Mapping[str, object]) -> "Metrics":
-        values: dict[str, int | float] = {}
+        values: dict[str, int | float | None] = {}
         for field in dataclasses.fields(cls):
             key = field.name
+            if field.type == float | None:
+                values[key] = None if dct.get(key) is None else cls._get_float(dct, key)
+                continue
             if field.type is int:
                 values[key] = cls._get_int(dct, key)
                 continue

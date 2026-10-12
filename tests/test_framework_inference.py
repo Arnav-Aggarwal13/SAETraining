@@ -94,6 +94,9 @@ def test_img_folder_inference():
         assert metrics["normalized_mse"] == pytest.approx(
             metrics["sse_recon"] / metrics["sse_baseline"], rel=1e-6
         )
+        for key in ("cosine_uncentered", "cosine_centered"):
+            assert metrics[key] is not None
+            assert -1.0 <= metrics[key] <= 1.0
 
 
 def test_metrics_roundtrip():
@@ -166,3 +169,49 @@ def test_metrics_from_dict_rejects_bool_for_float_fields():
 
     with pytest.raises(AssertionError):
         saev.metrics.Metrics.from_dict(metrics)
+
+
+def test_metrics_cosine_roundtrip():
+    metrics = saev.metrics.Metrics.from_accumulators(
+        sse_recon=42.0,
+        sse_baseline=84.0,
+        n_tokens=8,
+        d_model=3,
+        sum_cos_uncentered=6.0,
+        sum_cos_centered=4.0,
+    )
+    assert metrics.cosine_uncentered == pytest.approx(0.75)
+    assert metrics.cosine_centered == pytest.approx(0.5)
+    dct = json.loads(json.dumps(metrics.to_dict()))
+    assert saev.metrics.Metrics.from_dict(dct) == metrics
+
+
+def test_metrics_from_dict_loads_files_without_cosine_keys():
+    # Older metrics.json files were written before the cosine fields existed.
+    dct = saev.metrics.Metrics.from_accumulators(
+        sse_recon=42.0, sse_baseline=84.0, n_tokens=7, d_model=3
+    ).to_dict()
+    del dct["cosine_uncentered"], dct["cosine_centered"]
+    loaded = saev.metrics.Metrics.from_dict(dct)
+    assert loaded.cosine_uncentered is None
+    assert loaded.cosine_centered is None
+
+
+def test_metrics_cosine_is_optional_in_from_accumulators():
+    metrics = saev.metrics.Metrics.from_accumulators(
+        sse_recon=42.0, sse_baseline=84.0, n_tokens=7, d_model=3
+    )
+    assert metrics.cosine_uncentered is None
+    assert metrics.cosine_centered is None
+
+
+@pytest.mark.parametrize("bad_sum", (9.0, -9.0))
+def test_metrics_rejects_out_of_range_cosine(bad_sum: float):
+    with pytest.raises(AssertionError):
+        saev.metrics.Metrics.from_accumulators(
+            sse_recon=42.0,
+            sse_baseline=84.0,
+            n_tokens=8,
+            d_model=3,
+            sum_cos_uncentered=bad_sum,
+        )

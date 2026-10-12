@@ -4,7 +4,7 @@
 #SBATCH -p mit_normal_gpu
 #SBATCH --gres=gpu:1
 #SBATCH -c 8
-#SBATCH --mem=64G
+#SBATCH --mem=128G
 #SBATCH -t 04:00:00
 #SBATCH -o logs/%x-%j.out
 #SBATCH --account=mit_amf_standard_gpu
@@ -20,6 +20,7 @@ case $SPLIT in
   *) echo "SPLIT must be val or train, got '$SPLIT'" >&2; exit 1 ;;
 esac
 # Writes metrics.json + sparse token_acts.npz under $RUNS_ROOT/$RUN/inference/<shards hash>/.
+# --data.buffer-size 4: for big SAEs (53k latents, k=128) the consumer is slower than the loader. With the default 64-batch buffer the loader finishes early, waits 60 s, and tears down shared memory while the consumer still has minutes of batches left ("Manager process died unexpectedly"). A small buffer keeps it from running far ahead.
 uv run launch.py inference \
   --run $RUNS_ROOT/$RUN \
-  --data.shards $SHARDS_ROOT/$HASH --data.layer 48
+  --data.shards $SHARDS_ROOT/$HASH --data.layer 48 --data.buffer-size 4

@@ -33,6 +33,7 @@ import tyro
 from saev import configs, disk, helpers, nn
 from saev.data import Metadata, OrderedConfig, OrderedDataLoader
 from saev.metrics import Metrics
+from saev.utils import statistics
 
 log_format = "[%(asctime)s] [%(levelname)s] [%(name)s] %(message)s"
 logging.basicConfig(level=logging.INFO, format=log_format)
@@ -135,6 +136,28 @@ def need_compute(cfg: Config) -> tuple[bool, str, Filepaths]:
 
 @beartype.beartype
 @torch.inference_mode()
+def get_mean_vec(cfg: Config, batch_size: int, d_model: int) -> torch.Tensor:
+    """Mean activation over the unmasked tokens of the split, from a separate pass. Centered cosine similarity needs the mean before the main pass starts."""
+    dataloader = OrderedDataLoader(dataclasses.replace(cfg.data, batch_size=batch_size))
+    ignore = torch.tensor(cfg.ignore_labels)
+    sum_vec_d = torch.zeros((d_model,), dtype=torch.float64, device=cfg.device)
+    n_tokens = 0
+    for batch in helpers.progress(
+        tp.cast(collections.abc.Iterable[dict[str, torch.Tensor]], dataloader),
+        desc="mean",
+    ):
+        mask_b = torch.ones(len(batch["act"]), dtype=torch.bool)
+        if "token_labels" in batch:
+            mask_b = torch.isin(batch["token_labels"], ignore, invert=True)
+        acts_bd = batch["act"][mask_b].to(cfg.device, torch.float64)
+        sum_vec_d += acts_bd.sum(dim=0)
+        n_tokens += len(acts_bd)
+    assert n_tokens > 0, "Inference dataloader yielded zero valid tokens."
+    return sum_vec_d / n_tokens
+
+
+@beartype.beartype
+@torch.inference_mode()
 def worker_fn(cfg: Config):
     run = disk.Run(cfg.run)
     md = Metadata.load(cfg.data.shards)
@@ -150,7 +173,8 @@ def worker_fn(cfg: Config):
         helpers.jdump(cfg, fd)
 
     assert cfg.data.tokens == "content"
-    sae = nn.load(run.ckpt).to(cfg.device)
+    # eval() so BatchTopK uses its learned JumpReLU threshold, matching the end-of-training eval in train.py (nn.load returns a module in training mode).
+    sae = nn.load(run.ckpt).to(cfg.device).eval()
 
     if cfg.save:
         sparsity_s = torch.zeros((sae.cfg.d_sae,), device=cfg.device)
@@ -166,6 +190,7 @@ def worker_fn(cfg: Config):
         // md.content_tokens_per_example
         * md.content_tokens_per_example
     )
+    mean_d = get_mean_vec(cfg, batch_size, sae.cfg.d_model)
     dataloader = OrderedDataLoader(
         dataclasses.replace(cfg.data, batch_size=batch_size),
     )
@@ -182,6 +207,8 @@ def worker_fn(cfg: Config):
     reconstruction_sse = torch.zeros((), dtype=torch.float64, device=cfg.device)
     sum_sq = torch.zeros((), dtype=torch.float64, device=cfg.device)
     sum_vec_s = torch.zeros((sae.cfg.d_model,), dtype=torch.float64, device=cfg.device)
+    sum_cos_uncentered = torch.zeros((), dtype=torch.float64, device=cfg.device)
+    sum_cos_centered = torch.zeros((), dtype=torch.float64, device=cfg.device)
     n_tokens = 0
 
     logger.info("Loaded SAE and data.")
@@ -212,6 +239,11 @@ def worker_fn(cfg: Config):
             reconstruction_sse += torch.sum(diff_bd * diff_bd)
             sum_sq += (vit_masked_bd * vit_masked_bd).sum()
             sum_vec_s += vit_masked_bd.sum(dim=0)
+            cos_unc, cos_cen = statistics.cosine_sums(
+                vit_masked_bd, out.x_hats[:, -1, :][mask_b], mean_d
+            )
+            sum_cos_uncentered += cos_unc
+            sum_cos_centered += cos_cen
 
         if not cfg.save:
             continue
@@ -279,6 +311,8 @@ def worker_fn(cfg: Config):
         sse_baseline=sse_baseline,
         n_tokens=n_tokens,
         d_model=sae.cfg.d_model,
+        sum_cos_uncentered=sum_cos_uncentered.item(),
+        sum_cos_centered=sum_cos_centered.item(),
     )
 
     with open(fpaths.metrics, "wb") as fd:

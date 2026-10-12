@@ -4,7 +4,7 @@ from collections.abc import Sequence
 import beartype
 import numpy as np
 import torch
-from jaxtyping import Int, jaxtyped
+from jaxtyping import Float, Int, jaxtyped
 from torch import Tensor
 
 
@@ -131,3 +131,19 @@ def _assert_batch_dim(
     example_idx: Int[Tensor, " batch"], token_idx: Int[Tensor, " batch"]
 ) -> None:
     del example_idx, token_idx
+
+
+@jaxtyped(typechecker=beartype.beartype)
+def cosine_sums(
+    x_bd: Float[Tensor, "batch d"],
+    x_hat_bd: Float[Tensor, "batch d"],
+    mean_d: Float[Tensor, " d"],
+) -> tuple[Float[Tensor, ""], Float[Tensor, ""]]:
+    """
+    Sums, over tokens, of the per-token cosine similarity between activations and reconstructions.
+
+    Returns `(uncentered, centered)` as float64 scalars. Uncentered is cos(x, x_hat). Centered subtracts `mean_d` from both first, cos(x - mean, x_hat - mean), so it measures how well the deviation from the average token is reconstructed. Divide by the number of tokens for the mean.
+    """
+    x, x_hat, mean = (t.to(torch.float64) for t in (x_bd, x_hat_bd, mean_d))
+    cos = torch.nn.functional.cosine_similarity
+    return cos(x, x_hat, dim=-1).sum(), cos(x - mean, x_hat - mean, dim=-1).sum()

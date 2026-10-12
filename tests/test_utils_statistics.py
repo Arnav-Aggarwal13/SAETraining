@@ -6,7 +6,7 @@ import torch
 from jaxtyping import TypeCheckError
 from torch import Tensor
 
-from saev.utils.statistics import calc_batch_entropy
+from saev.utils.statistics import calc_batch_entropy, cosine_sums
 
 
 def _tensor(values: list[int]) -> Tensor:
@@ -111,3 +111,47 @@ def test_calc_batch_entropy_validates_inputs() -> None:
             n_examples=1,
             content_tokens_per_example=0,
         )
+
+
+def test_cosine_sums_perfect_reconstruction() -> None:
+    x = torch.randn(5, 4)
+    unc, cen = cosine_sums(x, x.clone(), x.mean(0))
+    assert unc.item() == pytest.approx(5.0)
+    assert cen.item() == pytest.approx(5.0)
+
+
+def test_cosine_sums_ignores_scale_when_mean_is_zero() -> None:
+    x = torch.randn(6, 4)
+    x = x - x.mean(0)
+    unc, cen = cosine_sums(x, 0.5 * x, torch.zeros(4))
+    assert unc.item() == pytest.approx(6.0)
+    assert cen.item() == pytest.approx(6.0)
+
+
+def test_cosine_sums_centering_changes_the_answer_when_mean_is_nonzero() -> None:
+    mean = torch.tensor([10.0, 0.0])
+    x = torch.tensor([[11.0, 1.0], [9.0, -1.0]])
+    x_hat = torch.tensor([[11.0, -1.0], [9.0, 1.0]])
+    unc, cen = cosine_sums(x, x_hat, mean)
+    # Uncentered vectors are nearly parallel (both close to the mean direction); centered deviations are orthogonal-ish.
+    assert unc.item() / 2 > 0.97
+    assert cen.item() / 2 == pytest.approx(0.0, abs=1e-9)
+
+
+def test_cosine_sums_orthogonal() -> None:
+    x = torch.tensor([[1.0, 0.0]])
+    x_hat = torch.tensor([[0.0, 1.0]])
+    unc, cen = cosine_sums(x, x_hat, torch.zeros(2))
+    assert unc.item() == pytest.approx(0.0, abs=1e-12)
+    assert cen.item() == pytest.approx(0.0, abs=1e-12)
+
+
+def test_cosine_sums_returns_float64_scalars() -> None:
+    unc, cen = cosine_sums(torch.randn(3, 4), torch.randn(3, 4), torch.zeros(4))
+    assert unc.dtype == torch.float64 and unc.shape == ()
+    assert cen.dtype == torch.float64 and cen.shape == ()
+
+
+def test_cosine_sums_rejects_shape_mismatch() -> None:
+    with pytest.raises(TypeCheckError):
+        cosine_sums(torch.randn(3, 4), torch.randn(3, 5), torch.zeros(4))
